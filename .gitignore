@@ -1,4 +1,16 @@
-.env
+# Virtual environments
 .venv/
-__pycache__/
+
+# Chroma database
 chroma_db/
+
+# Visual Studio
+.vs/
+
+# PyCharm
+.idea/
+*.iml
+
+# Python cache
+__pycache__/
+*.py[cod]
