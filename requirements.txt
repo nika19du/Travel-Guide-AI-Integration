@@ -3,3 +3,5 @@ chromadb
 pymupdf
 pydantic
 python-dotenv
+rich
+typing

@@ -13,29 +13,30 @@ from vector_store import VectorStoreManager
 from typing import TypeVar, Type
 from pydantic import BaseModel
 T = TypeVar("T", bound=BaseModel)
+from console import print_travel_answer
 
-def parse_structured_response(
-    system_prompt: str,
-    user_prompt: str,
+DEBUG = False
+
+# Sends a request to the LLM and parses the response directly
+# into the specified Pydantic model using Structured Outputs.
+# This helper is reused for both:
+# 1. Intent analysis (understanding the user request)
+# 2. Retrieval answer generation (creating the final answer
+#    from the retrieved PDF context)
+
+def generate_structured_response(
+    instructions: str,
+    user_input: str,
     response_model: Type[T]
 ) -> T:
-    response = client.beta.chat.completions.parse(
-        model="gpt-4o-mini",
-        messages=[
-            {
-                "role": "system",
-                "content": system_prompt
-            },
-            {
-                "role": "user",
-                "content": user_prompt
-            }
-        ],
-        response_format=response_model,
-        temperature=0
+    response = client.responses.parse(
+        model = "gpt-4o-mini",
+        instructions = instructions,
+        input = user_input,
+        text_format = response_model
     )
 
-    parsed_result = response.choices[0].message.parsed
+    parsed_result = response.output_parsed
 
     if parsed_result is None:
         raise ValueError(
@@ -49,6 +50,9 @@ def retrieve_information(
     prompt: str,
     vector_store: VectorStoreManager
 ) -> TravelGuideAnswer:
+    # search_requests queries are converted into embeddings and used
+    # by ChromaDB to retrieve the most semantically relevant chunks.
+    # The LLM is NOT involved in this step.
     search_requests =[
         {
             "query": prompt,
@@ -89,6 +93,11 @@ def retrieve_information(
     retrieved_chunks = []
 
     for request in search_requests:
+        # IMPORTANT:
+        # Embeddings are used only for sematic search.
+        # The LLM never receives embedding vectors.
+        # ChromaDB returns the original text chunks, which are
+        # then provided to the model as context
         results = vector_store.search(
             query=request["query"],
             top_k=request["top_k"],
@@ -110,6 +119,8 @@ def retrieve_information(
         key=lambda chunk: chunk["distance"],
     )
 
+    # The retrieved chunks are converted back into plain text.
+    # This text becomes the context that will be sent to the LLM.
     context = "\n\n".join(
         (
             f"[Source File: {chunk['source']}, "
@@ -120,28 +131,34 @@ def retrieve_information(
     )
 
 
-    for index, chunk in enumerate(unique_chunks, start=1):
-        print(f"\n--- Retrieved chunk {index} ---")
-        print(
-            f"Source: {chunk['source']}, "
-            f"Page: {chunk['page']}, "
-            f"Distance: {chunk['distance']:.4f}"
-        )
-        print(chunk["text"])
+    if DEBUG:
+        for index, chunk in enumerate(unique_chunks, start=1):
+            print(f"\n--- Retrieved chunk {index} ---")
+            print(
+                f"Source: {chunk['source']}, "
+                f"Page: {chunk['page']}, "
+                f"Distance: {chunk['distance']:.4f}"
+            )
+            print(chunk["text"])
 
-    parsed_answer = parse_structured_response(
-        system_prompt=RETRIEVAL_SYSTEM_PROMPT,
-        user_prompt=(
+    # Step 2:
+    # The model now receives:
+    # - the retrieved PDF text (context)
+    # - the original user question
+    # - instructions describing how the final answer should be structured
+    # The model never sees the embeddings !!!
+    # It only reads the retrieved text chunks!
+    parsed_answer = generate_structured_response(
+        instructions = RETRIEVAL_SYSTEM_PROMPT,
+        user_input = (
             f"Retrieved PDF context:\n\n{context}\n\n"
             f"Question:\n\n{prompt}"
         ),
-        response_model=TravelGuideAnswer
+        response_model = TravelGuideAnswer
     )
 
-    if parsed_answer is None:
-        raise Exception("The model did not return a valid structured answer.")
-
     return parsed_answer
+
 
 def ask_ai(
     question: str,
@@ -150,10 +167,16 @@ def ask_ai(
     print("\n--------------------------------------------------")
     print(f'User Question: "{question}"')
 
-    parsed_intent = parse_structured_response(
-        system_prompt=INTENT_SYSTEM_PROMPT,
-        user_prompt=question,
-        response_model=IntentAnalysis
+    # Step 1:
+    # The model analyzes the user question only.
+    # It does Not have access to the PDF documents yet.
+    # Its job is to extract a clean retrieval prompt
+    # and determine the desired output format.
+
+    parsed_intent = generate_structured_response(
+        instructions = INTENT_SYSTEM_PROMPT,
+        user_input = question,
+        response_model = IntentAnalysis
     )
 
     extracted_prompt = parsed_intent.prompt
@@ -168,11 +191,22 @@ def ask_ai(
     )
 
     if parsed_intent.format == "text":
+        print_travel_answer(travel_answer)
         markdown_answer = format_travel_answer_as_markdown(
             travel_answer
         )
-
-        print("\n" + markdown_answer)
+    #elif parsed_intent.format == "audio":
+        # formatted_answer = generate_audio_answer(
+        #    travel_answer
+        #)
+    #elif parsed_intent.format == "image":
+        #formatted_answer = generate_image_answer(
+        #    travel_answer
+        #)
+    #else:
+        #raise ValueError(
+            #f"Unsupported output format: {parsed_intent.format}"
+        #)
 
     return AskAIResult(
         intent=parsed_intent,
