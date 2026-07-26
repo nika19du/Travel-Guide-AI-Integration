@@ -1,7 +1,6 @@
 from rag_service import ask_ai
 from vector_store import VectorStoreManager
 
-
 def main() -> None:
     vector_store = VectorStoreManager(
         collection_name="travel_guides"

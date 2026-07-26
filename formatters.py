@@ -1,6 +1,5 @@
 from models import TravelGuideAnswer
 
-
 def format_travel_answer_as_markdown(
     answer: TravelGuideAnswer
 ) -> str:
