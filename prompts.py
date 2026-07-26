@@ -36,6 +36,10 @@ Rules:
 13. Include in source_pages only pages that directly support the returned
     best_periods or cheapest_periods.
     Do not include pages that contain only general planning or cost information.
+14. Only include information that directly answers the user's question.
+15. Do not include additional categories or travel information unless the user explicitly asks for them.
+    For example, if the user asks only about the best time to visit,
+    do not include the cheapest periods.
 """
 
 
