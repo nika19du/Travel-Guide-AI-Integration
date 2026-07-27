@@ -1,5 +1,9 @@
+import json
+from typing import Type, TypeVar
+
+from pydantic import BaseModel
+
 from config import client
-from formatters import format_travel_answer_as_markdown
 from models import (
     AskAIResult,
     IntentAnalysis,
@@ -9,31 +13,35 @@ from prompts import (
     INTENT_SYSTEM_PROMPT,
     RETRIEVAL_SYSTEM_PROMPT
 )
+from tools import (
+    TRAVEL_GUIDE_TOOLS,
+    execute_tool
+)
 from vector_store import VectorStoreManager
-from typing import TypeVar, Type
-from pydantic import BaseModel
+
 T = TypeVar("T", bound=BaseModel)
-from console import print_travel_answer
 
-DEBUG = False
+DEBUG = True
+MAX_TOOL_ITERATIONS = 8
 
-# Sends a request to the LLM and parses the response directly
-# into the specified Pydantic model using Structured Outputs.
-# This helper is reused for both:
-# 1. Intent analysis (understanding the user request)
-# 2. Retrieval answer generation (creating the final answer
-#    from the retrieved PDF context)
 
 def generate_structured_response(
     instructions: str,
     user_input: str,
     response_model: Type[T]
 ) -> T:
+    """
+    Sends a request to the model and parses the response
+    directly into the supplied Pydantic model.
+
+    This is currently used for intent analysis.
+    """
+
     response = client.responses.parse(
-        model = "gpt-4o-mini",
-        instructions = instructions,
-        input = user_input,
-        text_format = response_model
+        model="gpt-4o-mini",
+        instructions=instructions,
+        input=user_input,
+        text_format=response_model
     )
 
     parsed_result = response.output_parsed
@@ -46,167 +54,208 @@ def generate_structured_response(
 
     return parsed_result
 
+
 def retrieve_information(
     prompt: str,
     vector_store: VectorStoreManager
 ) -> TravelGuideAnswer:
-    # search_requests queries are converted into embeddings and used
-    # by ChromaDB to retrieve the most semantically relevant chunks.
-    # The LLM is NOT involved in this step.
-    search_requests =[
-        {
-            "query": prompt,
-            "source": None,
-            "top_k": 3
-        },
-        {
-            "query": "Prague best time to visit and best weather",
-            "source": "prague_tour_guide.pdf",
-            "top_k": 2
-        },
-        {
-            "query": (
-                "Prague cheapest time to visit, "
-                "lower flight and accommodation prices"
-            ),
-            "source": "prague_tour_guide.pdf",
-            "top_k": 2
-        },
-        {
-            "query": (
-                "Malaga best time for beach life, "
-                "sightseeing and excursions"
-            ),
-            "source": "malaga_tour_guide.pdf",
-            "top_k": 2
-        },
-        {
-            "query": (
-                "Malaga cheapest time, fair prices, "
-                "shoulder seasons and most economical period"
-            ),
-            "source": "malaga_tour_guide.pdf",
-            "top_k": 2
-        }
-    ]
+    """
+    Uses Responses API tool calling.
 
-    retrieved_chunks = []
+    The model decides:
+    - whether guide search is needed;
+    - which search query to use;
+    - whether to filter by a destination;
+    - how many chunks to retrieve;
+    - whether to perform more than one search.
 
-    for request in search_requests:
-        # IMPORTANT:
-        # Embeddings are used only for sematic search.
-        # The LLM never receives embedding vectors.
-        # ChromaDB returns the original text chunks, which are
-        # then provided to the model as context
-        results = vector_store.search(
-            query=request["query"],
-            top_k=request["top_k"],
-            source=request["source"]
-        )
+    The final response is parsed into TravelGuideAnswer.
+    """
 
-        retrieved_chunks.extend(results)
-
-    unique_chunks_by_id = {}
-
-    for chunk in retrieved_chunks:
-        existing = unique_chunks_by_id.get(chunk["id"])
-
-        if existing is None or chunk["distance"] < existing["distance"]:
-            unique_chunks_by_id[chunk["id"]] = chunk
-
-    unique_chunks = sorted(
-        unique_chunks_by_id.values(),
-        key=lambda chunk: chunk["distance"],
+    instructions = (
+        f"{RETRIEVAL_SYSTEM_PROMPT}\n\n"
+        "You have access to indexed PDF travel guides.\n\n"
+        "Available destinations:\n"
+        "- Prague\n"
+        "- Malaga\n\n"
+        "Tool usage rules:\n"
+        "1. If the question mentions Prague, call search_travel_guides "
+        "with destination='Prague'.\n"
+        "2. If the question mentions Malaga, call search_travel_guides "
+        "with destination='Malaga'.\n"
+        "3. If the user explicitly asks to compare Prague and Malaga, "
+        "perform a separate search for each destination.\n"
+        "4. Do not search an unrequested destination.\n"
+        "5. Use list_available_guides only when you need to discover "
+        "which guides are available.\n"
+        "6. Base the answer only on retrieved chunks.\n"
+        "7. For search_travel_guides, use top_k=5 by default "
+        "and never use a value lower than 3.\n"
     )
 
-    # The retrieved chunks are converted back into plain text.
-    # This text becomes the context that will be sent to the LLM.
-    context = "\n\n".join(
-        (
-            f"[Source File: {chunk['source']}, "
-            f"Page: {chunk['page']}]\n"
-            f"{chunk['text']}"
-        )
-        for chunk in unique_chunks
+    response = client.responses.parse(
+        model = "gpt-4o-mini",
+        instructions = instructions,
+        input = prompt,
+        tools = TRAVEL_GUIDE_TOOLS,
+        text_format = TravelGuideAnswer
     )
 
+    for iteration in range(MAX_TOOL_ITERATIONS):
+        function_calls = [
+            output_item
+            for output_item in response.output
+            if output_item.type == "function_call"
+        ]
 
-    if DEBUG:
-        for index, chunk in enumerate(unique_chunks, start=1):
-            print(f"\n--- Retrieved chunk {index} ---")
-            print(
-                f"Source: {chunk['source']}, "
-                f"Page: {chunk['page']}, "
-                f"Distance: {chunk['distance']:.4f}"
+        # No tool calls means the model has produced its final answer.
+        if not function_calls:
+            parsed_answer = response.output_parsed
+
+            if parsed_answer is None:
+                raise ValueError(
+                    "The model did not return a valid "
+                    "TravelGuideAnswer."
+                )
+
+            invalid_destinations = {
+                "comparison",
+                "summary",
+                "overall"
+            }
+
+            parsed_answer.destinations = [
+                destination
+                for destination in parsed_answer.destinations
+                if destination.destination.strip().lower()
+                not in invalid_destinations
+            ]
+
+            return parsed_answer
+
+        tool_outputs = []
+
+        for function_call in function_calls:
+            if DEBUG:
+                print(
+                    f"\nTool call: {function_call.name}"
+                )
+                print(
+                    f"Arguments: {function_call.arguments}"
+                )
+
+            tool_result = run_function_call(
+                function_call=function_call,
+                vector_store=vector_store
             )
-            print(chunk["text"])
 
-    # Step 2:
-    # The model now receives:
-    # - the retrieved PDF text (context)
-    # - the original user question
-    # - instructions describing how the final answer should be structured
-    # The model never sees the embeddings !!!
-    # It only reads the retrieved text chunks!
-    parsed_answer = generate_structured_response(
-        instructions = RETRIEVAL_SYSTEM_PROMPT,
-        user_input = (
-            f"Retrieved PDF context:\n\n{context}\n\n"
-            f"Question:\n\n{prompt}"
-        ),
-        response_model = TravelGuideAnswer
+            if DEBUG:
+                print("Tool result:")
+                print(
+                    json.dumps(
+                        tool_result,
+                        indent=2,
+                        ensure_ascii=False
+                    )
+                )
+
+            tool_outputs.append({
+                "type": "function_call_output",
+                "call_id": function_call.call_id,
+                "output": json.dumps(
+                    tool_result,
+                    ensure_ascii=False
+                )
+            })
+
+        # Send the locally executed tool results back to the model.
+        response = client.responses.parse(
+            model = "gpt-4o-mini",
+            instructions = instructions,
+            previous_response_id = response.id,
+            input = tool_outputs,
+            tools = TRAVEL_GUIDE_TOOLS,
+            text_format = TravelGuideAnswer
+        )
+
+    raise RuntimeError(
+        "The maximum number of tool-call iterations "
+        "was exceeded."
     )
 
-    return parsed_answer
+
+def run_function_call(
+    function_call,
+    vector_store: VectorStoreManager
+):
+    """
+    Converts the JSON tool arguments into a Python dictionary
+    and executes the requested local function.
+    """
+
+    try:
+        arguments = json.loads(function_call.arguments)
+    except json.JSONDecodeError as error:
+        return {
+            "success": False,
+            "error": "Invalid tool arguments.",
+            "details": str(error)
+        }
+
+    try:
+        return execute_tool(
+            vector_store=vector_store,
+            tool_name=function_call.name,
+            arguments=arguments
+        )
+    except Exception as error:
+        return {
+            "success": False,
+            "error": (
+                f"Tool '{function_call.name}' failed."
+            ),
+            "details": str(error)
+        }
 
 
 def ask_ai(
     question: str,
     vector_store: VectorStoreManager
 ) -> AskAIResult:
-    print("\n--------------------------------------------------")
+    print(
+        "\n"
+        "--------------------------------------------------"
+    )
     print(f'User Question: "{question}"')
 
-    # Step 1:
-    # The model analyzes the user question only.
-    # It does Not have access to the PDF documents yet.
-    # Its job is to extract a clean retrieval prompt
-    # and determine the desired output format.
+    if not question or not question.strip():
+        raise ValueError(
+            "The user question cannot be empty."
+        )
 
+    # Step 1:
+    # Analyze the user's original question.
     parsed_intent = generate_structured_response(
-        instructions = INTENT_SYSTEM_PROMPT,
-        user_input = question,
-        response_model = IntentAnalysis
+        instructions=INTENT_SYSTEM_PROMPT,
+        user_input=question.strip(),
+        response_model=IntentAnalysis
     )
 
     extracted_prompt = parsed_intent.prompt
     requested_format = parsed_intent.format
 
     print(f'Extracted Prompt: "{extracted_prompt}"')
-    print(f'Detected Format: "{requested_format.upper()}"')
-
-    travel_answer = retrieve_information(
-        prompt=parsed_intent.prompt,
-        vector_store=vector_store
+    print(
+        f'Detected Format: '
+        f'"{requested_format.upper()}"'
     )
 
-    if parsed_intent.format == "text":
-        print_travel_answer(travel_answer)
-        markdown_answer = format_travel_answer_as_markdown(
-            travel_answer
-        )
-    #elif parsed_intent.format == "audio":
-        # formatted_answer = generate_audio_answer(
-        #    travel_answer
-        #)
-    #elif parsed_intent.format == "image":
-        #formatted_answer = generate_image_answer(
-        #    travel_answer
-        #)
-    #else:
-        #raise ValueError(
-            #f"Unsupported output format: {parsed_intent.format}"
-        #)
+    # Step 2:
+    # Let the model choose and execute the retrieval tools.
+    travel_answer = retrieve_information(
+        prompt=extracted_prompt,
+        vector_store=vector_store
+    )
 
     return AskAIResult(
         intent=parsed_intent,
