@@ -4,7 +4,6 @@ from typing import Type, TypeVar
 from pydantic import BaseModel
 
 from config import client
-from console import print_travel_answer
 from models import (
     AskAIResult,
     IntentAnalysis,
@@ -19,7 +18,6 @@ from tools import (
     execute_tool
 )
 from vector_store import VectorStoreManager
-
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -67,7 +65,7 @@ def retrieve_information(
     The model decides:
     - whether guide search is needed;
     - which search query to use;
-    - whether to filter by a PDF source;
+    - whether to filter by a destination;
     - how many chunks to retrieve;
     - whether to perform more than one search.
 
@@ -77,19 +75,22 @@ def retrieve_information(
     instructions = (
         f"{RETRIEVAL_SYSTEM_PROMPT}\n\n"
         "You have access to indexed PDF travel guides.\n\n"
-        "Available source mapping:\n"
-        "- Prague -> prague_tour_guide.pdf\n"
-        "- Malaga -> malaga_tour_guide.pdf\n\n"
+        "Available destinations:\n"
+        "- Prague\n"
+        "- Malaga\n\n"
         "Tool usage rules:\n"
-        "1. If the question mentions Prague, search only "
-        "prague_tour_guide.pdf.\n"
-        "2. If the question mentions Malaga, search only "
-        "malaga_tour_guide.pdf.\n"
-        "3. Include multiple destinations only when the user "
-        "explicitly asks for a comparison.\n"
-        "4. Use list_available_guides only when you need to discover "
-        "which guide files are available.\n"
-        "5. Base the answer only on retrieved chunks.\n"
+        "1. If the question mentions Prague, call search_travel_guides "
+        "with destination='Prague'.\n"
+        "2. If the question mentions Malaga, call search_travel_guides "
+        "with destination='Malaga'.\n"
+        "3. If the user explicitly asks to compare Prague and Malaga, "
+        "perform a separate search for each destination.\n"
+        "4. Do not search an unrequested destination.\n"
+        "5. Use list_available_guides only when you need to discover "
+        "which guides are available.\n"
+        "6. Base the answer only on retrieved chunks.\n"
+        "7. For search_travel_guides, use top_k=5 by default "
+        "and never use a value lower than 3.\n"
     )
 
     response = client.responses.parse(
@@ -116,6 +117,19 @@ def retrieve_information(
                     "The model did not return a valid "
                     "TravelGuideAnswer."
                 )
+
+            invalid_destinations = {
+                "comparison",
+                "summary",
+                "overall"
+            }
+
+            parsed_answer.destinations = [
+                destination
+                for destination in parsed_answer.destinations
+                if destination.destination.strip().lower()
+                not in invalid_destinations
+            ]
 
             return parsed_answer
 
@@ -156,12 +170,12 @@ def retrieve_information(
 
         # Send the locally executed tool results back to the model.
         response = client.responses.parse(
-            model="gpt-4o-mini",
-            instructions=instructions,
-            previous_response_id=response.id,
-            input=tool_outputs,
-            tools=TRAVEL_GUIDE_TOOLS,
-            text_format=TravelGuideAnswer
+            model = "gpt-4o-mini",
+            instructions = instructions,
+            previous_response_id = response.id,
+            input = tool_outputs,
+            tools = TRAVEL_GUIDE_TOOLS,
+            text_format = TravelGuideAnswer
         )
 
     raise RuntimeError(
@@ -180,9 +194,7 @@ def run_function_call(
     """
 
     try:
-        arguments = json.loads(
-            function_call.arguments
-        )
+        arguments = json.loads(function_call.arguments)
     except json.JSONDecodeError as error:
         return {
             "success": False,
@@ -191,17 +203,11 @@ def run_function_call(
         }
 
     try:
-        result = execute_tool(
+        return execute_tool(
             vector_store=vector_store,
             tool_name=function_call.name,
             arguments=arguments
         )
-
-        return {
-            "success": True,
-            "data": result
-        }
-
     except Exception as error:
         return {
             "success": False,
@@ -250,25 +256,6 @@ def ask_ai(
         prompt=extracted_prompt,
         vector_store=vector_store
     )
-
-    if requested_format == "text":
-        print_travel_answer(travel_answer)
-
-    elif requested_format == "audio":
-        raise ValueError(
-            "Audio output is not implemented yet."
-        )
-
-    elif requested_format == "image":
-        raise ValueError(
-            "Image output is not implemented yet."
-        )
-
-    else:
-        raise ValueError(
-            f"Unsupported output format: "
-            f"{requested_format}"
-        )
 
     return AskAIResult(
         intent=parsed_intent,

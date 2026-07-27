@@ -1,10 +1,8 @@
 from pathlib import Path
 
-from dotenv import load_dotenv
-
+from console import print_ai_result
 from rag_service import ask_ai
 from vector_store import VectorStoreManager
-
 
 DB_PATH = "./chroma_db"
 GUIDES_DIRECTORY = "./travel_guides"
@@ -60,9 +58,7 @@ def index_guides_if_needed(
     )
 
 
-def run_cli(
-    vector_store: VectorStoreManager
-):
+def run_cli(vector_store: VectorStoreManager):
     print(
         "\nTravel Guide AI Assistant"
     )
@@ -89,10 +85,12 @@ def run_cli(
             continue
 
         try:
-            ask_ai(
+            result = ask_ai(
                 question=question,
                 vector_store=vector_store
             )
+
+            print_ai_result(result)
 
         except Exception as error:
             print(
@@ -101,7 +99,6 @@ def run_cli(
 
 
 def main():
-    load_dotenv()
 
     vector_store = VectorStoreManager(
         db_path=DB_PATH,

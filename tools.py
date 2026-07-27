@@ -1,9 +1,37 @@
+from pydantic import BaseModel, ConfigDict, Field
 from vector_store import VectorStoreManager
 
 SOURCE_MAPPING = {
     "Prague": "prague_tour_guide.pdf",
     "Malaga": "malaga_tour_guide.pdf",
 }
+
+class SearchTravelGuidesParams(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    query: str = Field(
+        description=(
+            "A concise semantic search query describing "
+            "the requested information."
+        )
+    )
+    destination: str | None = Field(
+        description = (
+            "Destination filter, for example Prague or Malaga. "
+            "Use null when no destination filter is required."
+        )
+    )
+    top_k: int = Field(
+        ge = 3,
+        le = 10,
+        description=(
+            "Number of retrieved chunks. Use 5 by default "
+            "and never fewer than 3."
+        )
+    )
+
+class ListAvailableTravelGuidesParams(BaseModel):
+    model_config = ConfigDict(extra="forbid")
 
 TRAVEL_GUIDE_TOOLS = [
     {
@@ -14,38 +42,7 @@ TRAVEL_GUIDE_TOOLS = [
             "about destinations, weather, prices, attractions, "
             "transport, accommodation and recommended travel periods."
         ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": (
-                        "The information that should be searched for."
-                    ),
-                },
-                "destination": {
-                    "type": ["string", "null"],
-                    "description": (
-                        "Optional destination filter, "
-                        "for example Prague or Malaga."
-                    ),
-                },
-                "top_k": {
-                    "type": "integer",
-                    "description": (
-                        "Maximum number of results."
-                    ),
-                    "minimum": 1,
-                    "maximum": 10,
-                },
-            },
-            "required": [
-                "query",
-                "destination",
-                "top_k"
-            ],
-            "additionalProperties": False
-        },
+        "parameters": SearchTravelGuidesParams.model_json_schema(),
         "strict": True,
     },
     {
@@ -55,21 +52,16 @@ TRAVEL_GUIDE_TOOLS = [
             "List the destinations and travel guides "
             "available in the vector database."
         ),
-        "parameters": {
-            "type": "object",
-            "properties": {},
-            "required": [],
-            "additionalProperties": False
-        },
+        "parameters": ListAvailableTravelGuidesParams.model_json_schema(),
         "strict": True,
     },
 ]
 
 
 def search_travel_guides(
-    vector_store,
-    query,
-    source = None,
+    vector_store: VectorStoreManager,
+    query: str,
+    destination: str | None,
     top_k = 5
 ):
     """
@@ -81,16 +73,30 @@ def search_travel_guides(
         top_k: Maximum number of chunks to return.
     """
 
+    source = SOURCE_MAPPING.get(destination)
+
+    if destination is not None and source is None:
+        return {
+            "success": False,
+            "error": f"No indexed guide found for {destination}"
+        }
+
+    safe_top_k = max(3, min(top_k, 10))
+
     results = vector_store.search(
         query = query,
         source = source,
-        top_k=top_k)
+        top_k = safe_top_k)
 
     return {
-        "query": query,
-        "source_filter": source,
-        "result_count": len(results),
-        "results": results
+        "success": True,
+        "data": {
+            "query": query,
+            "destination": destination,
+            "source_filter": source,
+            "result_count": len(results),
+            "results": results
+        }
     }
 
 
@@ -98,23 +104,31 @@ def list_available_guides(vector_store: VectorStoreManager):
     guides = vector_store.list_available_guides()
 
     return {
-        "guide_count": len(guides),
-        "indexed_chunk_count":vector_store.count_chunks(),
-        "guides": guides
+        "success": True,
+        "data": {
+            "guide_count": len(guides),
+            "indexed_chunk_count": vector_store.count_chunks(),
+            "guides": guides
+        }
     }
 
-def execute_tool(tool_name,arguments, vector_store):
+def execute_tool(
+    tool_name: str,
+    arguments: dict,
+    vector_store: VectorStoreManager
+):
     if tool_name == "search_travel_guides":
-        destination = arguments.get("destination")
-        source = SOURCE_MAPPING.get(destination)
+        params = SearchTravelGuidesParams.model_validate(arguments)
 
         return search_travel_guides(
             vector_store = vector_store,
-            query = arguments["query"],
-            source = source,
-            top_k = arguments.get("top_k", 5)
+            query = params.query,
+            destination = params.destination,
+            top_k = params.top_k
         )
-    elif tool_name == "list_available_guides":
-        return list_available_guides(vector_store = vector_store)
 
-    raise ValueError(f"Unknown tool: {tool_name}")
+    if tool_name == "list_available_guides":
+        ListAvailableTravelGuidesParams.model_validate(arguments)
+        return list_available_guides(vector_store)
+
+    raise ValueError(f"Tool '{tool_name}' not found.")

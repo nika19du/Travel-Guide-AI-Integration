@@ -6,56 +6,59 @@ class IntentAnalysis(BaseModel):
     prompt: str = Field(
         description="The complete factual question to answer."
     )
-    format: Literal['text', 'image', 'audio'] = Field(
+    format: Literal["text", "image", "audio"] = Field(
         description="Requested output format."
     )
 
-class TravelPeriod(BaseModel):
-    purpose: str = Field(
-        description=(
-            "The exact reason or travel purpose stated in the source, "
-            "such as best weather, beach life, sightseeing, fair prices, "
-            "cheaper shoulder-season options, or most economical period. "
-            "Do not invent or reuse a category from another destination."
+class TravelGuideItem(BaseModel):
+    title: str = Field(
+        description = (
+            "Short title of the retrieved recommendation, place, "
+            "period, transport option, accommodation, or other result."
         )
     )
 
-    period: str = Field(
-        description=(
-            "The complete grouped period as stated in the source. "
-            "Preserve ranges and alternatives in one string, for example "
-            "'May to September, especially June and September', "
-            "'June or September', or 'March or October'."
+    description: str = Field(
+        description= (
+            "Factual description based only on the retrieved context."
         )
     )
 
 class DestinationTravelAnswer(BaseModel):
     destination: str = Field(
-        description="The destination described by this answer."
-    )
-    best_periods: List[TravelPeriod] = Field(
         description=(
-            "Periods explicitly presented as best times to visit, "
-            "preserving complete ranges and purposes."
+            "The unique destination described by this answer. "
+            "There must be only one answer object per destination."
         )
     )
 
-    cheapest_periods: List[TravelPeriod] = Field(
+    summary: str = Field(
         description=(
-            "Periods explicitly related to lower prices, fair prices, "
-            "cheaper shoulder-season options, or the most economical time. "
-            "Preserve the distinction between these price categories."
+            "A complete direct answer to the user's question for this "
+            "destination. Combine all relevant aspects in one summary."
+        )
+    )
+
+    items: List[TravelGuideItem] = Field(
+        default_factory=list,
+        description=(
+            "All relevant facts for this destination. For example, if the "
+            "source provides both the best and cheapest travel periods, "
+            "include both as separate items inside this single destination "
+            "object instead of creating duplicate destination objects."
         )
     )
 
     source_files: List[str] = Field(
         description="PDF filenames that directly support the answer."
     )
+
     source_pages: List[int] = Field(
         description=(
-            "Only the page numbers that directly support the returned periods."
+            "Only the page numbers that directly support the answer."
         )
     )
+
     missing_information: List[str] = Field(
         default_factory=list,
         description=(
@@ -65,7 +68,14 @@ class DestinationTravelAnswer(BaseModel):
     )
 
 class TravelGuideAnswer(BaseModel):
-    destinations: List[DestinationTravelAnswer]
+    destinations: List[DestinationTravelAnswer] =  Field(
+        description=(
+            "One answer object per unique destination. "
+            "Never create multiple objects for the same destination. "
+            "Combine all relevant information for a destination into "
+            "a single object and place the individual facts in items."
+        )
+    )
 
 class AskAIResult(BaseModel):
     intent: IntentAnalysis

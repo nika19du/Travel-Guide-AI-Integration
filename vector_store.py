@@ -93,13 +93,15 @@ class VectorStoreManager:
                 "top_k must be greater than zero."
             )
 
+        normalized_query = query.strip().lower()
+
         query_embedding = self._create_embedding(
             query.strip()
         )
 
         query_arguments = {
             "query_embeddings": [query_embedding],
-            "n_results": top_k,
+            "n_results": max(top_k, 5),
             "include": [
                 "documents",
                 "metadatas",
@@ -129,16 +131,35 @@ class VectorStoreManager:
             metadatas,
             distances
         ):
+            normalized_document = document.strip().lower()
+
+            exact_heading_match = (
+                normalized_document.startswith(normalized_query)
+            )
+
+            adjusted_distance = distance
+
+            if exact_heading_match:
+                adjusted_distance -= 1.0
+
             chunks.append({
                 "id": chunk_id,
                 "text": document,
                 "source": metadata.get("source"),
                 "page": metadata.get("page"),
                 "chunk_index": metadata.get("chunk_index"),
-                "distance": distance
+                "distance": distance,
+                "_adjusted_distance": adjusted_distance
             })
 
-        return chunks
+        chunks.sort(key = lambda chunk: chunk["_adjusted_distance"])
+
+        selected_chunks = chunks[:top_k]
+
+        for chunk in selected_chunks:
+            chunk.pop("_adjusted_distance", None)
+
+        return selected_chunks
 
     def list_available_guides(self):
         results = self.collection.get(

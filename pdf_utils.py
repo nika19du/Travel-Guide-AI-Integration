@@ -1,8 +1,18 @@
+import re
 from pathlib import Path
 
 import fitz
 
+import rag_service
+
+SECTION_HEADINGS = (
+    "Best Time to Visit",
+    "Worst Time to Visit",
+    "Cheapest Time to Visit"
+)
+
 def extract_pdf_pages(pdf_path: str) -> list[dict]:
+    path = Path(pdf_path)
     path = Path(pdf_path)
 
     if not path.exists():
@@ -38,13 +48,59 @@ def split_text(
             "chunk_overlap must be smaller than chunk_size."
         )
 
+    if not text or not text.strip():
+        return []
+
+    sections = split_by_headings(text)
+
+    chunks = []
+
+    for section in sections:
+        chunks.extend(
+            split_by_size(
+                text = section,
+                chunk_size = chunk_size,
+                chunk_overlap = chunk_overlap
+            )
+        )
+
+    return chunks
+
+def split_by_headings(text: str) -> list[str]:
+    headings_pattern = "|".join(
+        re.escape(heading) for heading in SECTION_HEADINGS
+    )
+
+    pattern = rf"(?=^(?:{headings_pattern})\s*$)"
+
+    sections = re.split(
+        pattern,
+        text,
+        flags=re.IGNORECASE | re.MULTILINE
+    )
+
+    return [
+        section.strip()
+        for section in sections
+        if section.strip()
+    ]
+
+def split_by_size(
+    text: str,
+    chunk_size: int,
+    chunk_overlap: int
+) -> list[str]:
+    if len(text) <= chunk_size:
+        return [text]
+
     chunks = []
     step = chunk_size - chunk_overlap
 
-    for start in range(0, len(text), chunk_size):
-        chunk = text[start:start+chunk_size].strip()
+    for start in range(0, len(text), step):
+        chunk = text [
+            start: start + chunk_size
+        ].strip()
 
         if chunk:
             chunks.append(chunk)
-
     return chunks
