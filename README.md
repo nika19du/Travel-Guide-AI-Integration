@@ -137,4 +137,3 @@ Tell me about Malaga public transport as audio.
 | https://ai.google.dev/gemini-api/docs | Gemini API |
 | https://elevenlabs.io/docs | ElevenLabs |
 | https://docs.trychroma.com/ | ChromaDB |
-| https://python.langchain.com/docs | LangChain |
