@@ -85,6 +85,18 @@ Generate:
 • Audio
 ```
 
+### CAG vs Tool-Based RAG
+
+The CAG-style approach retrieves a fixed set of relevant chunks before
+calling the language model. This produces a concise and predictable answer.
+
+The tool-based RAG approach allows the model to decide which searches to
+perform. In this example, it retrieved additional information about airport
+transport, taxis, and car rental.
+
+CAG is simpler and more deterministic, while tool-based RAG is more flexible
+and can provide broader coverage.
+
 ---
 
 ## Example Questions
@@ -137,3 +149,4 @@ Tell me about Malaga public transport as audio.
 | https://ai.google.dev/gemini-api/docs | Gemini API |
 | https://elevenlabs.io/docs | ElevenLabs |
 | https://docs.trychroma.com/ | ChromaDB |
+
