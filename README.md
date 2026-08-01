@@ -119,6 +119,68 @@ Colab Output
 
 ---
 
+## Architecture Decisions
+
+### Why headings-based chunking?
+
+The travel guides are organised into well-defined sections such as *Best Time to Visit*, *Cheapest Time to Visit*, and *Worst Time to Visit*. Splitting the documents by section headings preserves their semantic structure and reduces the chance of mixing unrelated topics within the same chunk. This improves retrieval accuracy compared to splitting purely by character count.
+
+---
+
+### Why overlap?
+
+Chunks are generated with overlapping text to avoid losing information at chunk boundaries. If a sentence or idea spans two chunks, the overlap helps preserve context and increases the likelihood that semantic search retrieves the complete information.
+
+---
+
+### Why ChromaDB?
+
+ChromaDB provides efficient vector similarity search over the indexed travel-guide embeddings. Instead of matching exact keywords, it retrieves semantically similar content, allowing the assistant to answer questions expressed in different ways.
+
+---
+
+### Why Tool Calling?
+
+Rather than hardcoding the retrieval process, the OpenAI Responses API decides when and how to search the travel guides. The model can select the appropriate destination, perform multiple searches when necessary, and orchestrate the retrieval process before generating the final answer.
+
+---
+
+### Why Structured Outputs?
+
+Pydantic models guarantee that every response follows a predefined schema. This makes the application more reliable, simplifies post-processing, and allows image and audio generation to reuse the same structured travel information.
+
+---
+
+### Why Answer Normalization?
+
+Language models may occasionally return duplicate destinations or overlapping recommendations. A normalization step merges duplicated destinations, removes repeated items, filters synthetic entries such as "Comparison" or "Summary", and produces a cleaner final result.
+
+---
+
+### Why Gemini?
+
+Gemini is used to generate realistic travel images from the structured RAG output. The image prompt is built exclusively from verified travel-guide information, reducing hallucinations and ensuring that the generated illustration reflects the retrieved content.
+
+---
+
+### Why ElevenLabs?
+
+ElevenLabs converts the structured travel summary into natural-sounding speech. Instead of reading raw retrieved text, the application first builds a concise narration and then generates an audio travel guide for the user.
+
+---
+
+### Why Retrieval-Augmented Generation (RAG)?
+
+The language model is augmented with information retrieved from indexed travel guides before generating an answer. This allows the assistant to produce responses grounded in the uploaded PDF documents instead of relying solely on its pretrained knowledge.
+
+---
+
+### Why Intent Analysis?
+
+User requests are first analysed to determine both the travel question and the desired output format (text, image, or audio). Separating intent detection from retrieval keeps the architecture modular and allows the same retrieval pipeline to support multiple output modalities.
+
+---
+
 ## Retrieval Strategies
 
 ### CAG-Style Retrieval
