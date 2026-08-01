@@ -37,40 +37,64 @@ An AI-powered travel assistant built in **Google Colab** that answers travel que
 
 ## Notebook Structure
 
-The entire application is implemented in a single **Google Colab notebook** and is organised into the following sections:
+The entire application is implemented in a single Google Colab notebook and is organised into the following sections:
 
 1. Installation
 2. Imports
-3. OpenAI Client
+3. API Clients
 4. Data Models
 5. PDF Processing
 6. Vector Store
 7. Tool Definitions
 8. System Prompts
-9. RAG Service
-10. Image Generation
-11. Audio Generation
-12. Wrapper Functions
-13. Console Output
-14. Test Cases
+9. Shared Retrieval Utilities
+10. Retrieval Strategies
+    - CAG-style retrieval
+    - Tool-based RAG
+11. AI Orchestration
+12. Image Generation
+13. Audio Generation
+14. Wrapper Functions
+15. Console Output
+16. Retrieval Strategy Comparison
+17. Test Cases
 
 ---
 
 ## Workflow
+
+The assistant first analyses the user request and extracts:
+
+- the factual question that should be answered from the PDF guides;
+- the requested output format: text, image, or audio.
+
+The application uses tool-based RAG as its default retrieval strategy.
 
 ```text
 User Question
       │
       ▼
 Intent Analysis
-(OpenAI Responses API)
+(OpenAI Structured Output)
+      │
+      ├── Extracted travel question
+      └── Requested format
+            text / image / audio
       │
       ▼
-Prompt Extraction
+Retrieval Strategy
       │
-      ▼
-RAG Retrieval
-(ChromaDB + Tool Calling)
+      ├── CAG-style retrieval
+      │     ChromaDB search
+      │          │
+      │          ▼
+      │     Fixed retrieved context
+      │
+      └── Tool-based RAG (default)
+            OpenAI tool calling
+                  │
+                  ▼
+            One or more ChromaDB searches
       │
       ▼
 Structured TravelGuideAnswer
@@ -78,25 +102,104 @@ Structured TravelGuideAnswer
       ▼
 Answer Normalization
       │
+      ├── Remove synthetic destinations
+      ├── Merge duplicate destinations
+      └── Remove duplicate information
+      │
       ▼
-Generate:
-• Text
-• Image
-• Audio
+Output Generation
+      │
+      ├── Text response
+      ├── Gemini travel image
+      └── ElevenLabs audio narration
+      │
+      ▼
+Colab Output
 ```
 
-### CAG vs Tool-Based RAG
+---
 
-The CAG-style approach retrieves a fixed set of relevant chunks before
-calling the language model. This produces a concise and predictable answer.
+## Retrieval Strategies
 
-The tool-based RAG approach allows the model to decide which searches to
-perform. In this example, it retrieved additional information about airport
-transport, taxis, and car rental.
+### CAG-Style Retrieval
 
-CAG is simpler and more deterministic, while tool-based RAG is more flexible
-and can provide broader coverage.
+The CAG-style strategy performs semantic search before calling the language model. A fixed set of relevant PDF chunks is retrieved from ChromaDB and passed directly to the model as context.
 
+This approach is:
+
+- simple;
+- concise;
+- predictable;
+- based on a fixed retrieved context.
+
+### Tool-Based RAG
+
+The tool-based RAG strategy allows the language model to call the travel-guide search tool and decide:
+
+- which destination to search;
+- which semantic query to use;
+- how many searches are needed;
+- whether separate searches are required for comparisons.
+
+This approach is:
+
+- more flexible;
+- capable of retrieving broader information;
+- suitable for multi-destination comparisons;
+- potentially more verbose than the CAG-style approach.
+
+Tool-based RAG is the default strategy used by the public `ask_ai()` and `retrieve_information()` functions.
+
+---
+
+## CAG vs Tool-Based RAG
+
+The CAG-style approach retrieves a fixed set of relevant chunks before calling the language model. This usually produces a concise and predictable answer.
+
+The tool-based RAG approach allows the model to decide which searches to perform. In the public-transport comparison example, it retrieved additional information about airport transport, taxis, and car rental.
+
+Neither strategy is always better:
+
+| Strategy | Advantages | Trade-offs |
+|---|---|---|
+| CAG-style retrieval | Simpler, concise, predictable | Limited to the initially retrieved context |
+| Tool-based RAG | Flexible, broader retrieval, supports comparisons | More API steps and potentially more verbose output |
+
+---
+
+## Public Functions
+
+The required project functions keep the signatures defined in the assignment:
+
+```python
+def retrieve_information(prompt: str) -> str:
+    ...
+```
+
+```python
+def ask_ai(question: str) -> AskAIResult:
+    ...
+```
+
+Both functions use tool-based RAG by default.
+
+A separate internal function allows the two retrieval strategies to be tested and compared:
+
+```python
+retrieve_information_by_strategy(
+    prompt=question,
+    vector_store=vector_store,
+    strategy="cag"
+)
+```
+
+```python
+retrieve_information_by_strategy(
+    prompt=question,
+    vector_store=vector_store,
+    strategy="rag"
+)
+```
 ---
 
 ## Example Questions
